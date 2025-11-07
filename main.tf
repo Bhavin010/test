@@ -1,51 +1,79 @@
-# Get latest Amazon Linux 2023 AMI
-data "aws_ami" "amazon_linux_2023" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["al2023-ami-*-x86_64"]
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
+# Define the required providers for this configuration.
+# We need 'aws' to manage the resources and 'random' to generate unique names.
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }
   }
 }
 
-# EC2 Instances
-resource "aws_instance" "web" {
-  count                  = var.instance_count
-  ami                    = data.aws_ami.amazon_linux_2023.id
-  instance_type          = var.instance_type
-  subnet_id              = var.subnet_ids[count.index % length(var.subnet_ids)]
-  vpc_security_group_ids = var.security_group_ids
-  key_name               = var.key_name
-  iam_instance_profile   = var.iam_instance_profile
+# -----------------------------------------------------------------------------
+# 1. AWS Provider Configuration
+# -----------------------------------------------------------------------------
+provider "aws" {
+  # You can change the region here if needed, but us-east-1 is a good default.
+  region = "us-east-1"
+  # Credentials must be configured in the Terraform Cloud workspace 
+  # or in your local environment for this to run.
+}
 
-  user_data = var.user_data != "" ? var.user_data : templatefile("${path.module}/user-data.sh", {
-    environment = var.environment
-  })
+# -----------------------------------------------------------------------------
+# 2. Helper Resource for Unique Naming
+# -----------------------------------------------------------------------------
+# Generates a unique, readable name (e.g., "fast-fox-25"). This is critical 
+# for resources that require globally unique names, like S3 buckets, 
+# and prevents test conflicts.
+resource "random_pet" "unique_name" {
+  length = 2
+  separator = "-"
+}
 
-  root_block_device {
-    volume_size           = 30
-    volume_type           = "gp3"
-    encrypted             = true
-    delete_on_termination = true
+# -----------------------------------------------------------------------------
+# 3. Resource 1: AWS S3 Bucket (Simple Storage)
+# -----------------------------------------------------------------------------
+# This resource creates a simple S3 bucket in the specified region.
+resource "aws_s3_bucket" "test_bucket" {
+  # Bucket name must be globally unique. We use the random_pet resource.
+  bucket = "tfcloud-test-bucket-${random_pet.unique_name.id}"
+
+  # Ensure the bucket blocks public access, which is a modern security best practice.
+  tags = {
+    Name        = "TFCloudTestBucket"
+    Environment = "Testing"
   }
+}
 
-  metadata_options {
-    http_endpoint               = "enabled"
-    http_tokens                 = "required"
-    http_put_response_hop_limit = 1
-  }
+# -----------------------------------------------------------------------------
+# 4. Resource 2: AWS SQS Queue (Messaging Service)
+# -----------------------------------------------------------------------------
+# This resource creates a standard SQS queue.
+resource "aws_sqs_queue" "test_queue" {
+  # Queue names need to be unique within a region.
+  name                       = "tfcloud-test-queue-${random_pet.unique_name.id}"
+  delay_seconds              = 0
+  max_message_size           = 262144
+  message_retention_seconds  = 345600
+  visibility_timeout_seconds = 30
+}
 
-  tags = merge(
-    var.tags,
-    {
-      Name        = "${var.environment}-web-${count.index + 1}"
-      Environment = var.environment
-    }
-  )
+# -----------------------------------------------------------------------------
+# 5. Outputs (Verification)
+# -----------------------------------------------------------------------------
+# These outputs allow you to verify the successful creation and key properties 
+# of the resources after the 'terraform apply' completes.
+
+output "s3_bucket_name" {
+  description = "The globally unique name of the created S3 bucket."
+  value       = aws_s3_bucket.test_bucket.id
+}
+
+output "sqs_queue_url" {
+  description = "The URL required to send/receive messages from the SQS queue."
+  value       = aws_sqs_queue.test_queue.url
 }
