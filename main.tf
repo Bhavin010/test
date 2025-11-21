@@ -30,7 +30,7 @@ provider "aws" {
 # for resources that require globally unique names, like S3 buckets, 
 # and prevents test conflicts.
 resource "random_pet" "unique_name" {
-  length = 2
+  length = 1
   separator = "-"
 }
 
